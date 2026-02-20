@@ -1,0 +1,7 @@
+ocr:
+  api_base: "https://api.example.com/v1"
+  api_key: "token-test"
+  model: "A/B-C"
+  timeout_seconds: 120
+  max_retries: 2
+  retry_backoff_seconds: 1.0
