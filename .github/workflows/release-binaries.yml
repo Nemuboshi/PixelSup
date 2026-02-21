@@ -12,6 +12,9 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -28,21 +31,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python
+        run: uv python install 3.14
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install .
+        run: uv sync --locked
 
       - name: Create entrypoint
-        shell: bash
         run: |
           cat > entrypoint.py <<'PY'
           from pixelsup.cli import main
@@ -52,10 +52,9 @@ jobs:
           PY
 
       - name: Build binary
-        run: pyinstaller --onefile --name pixelsup entrypoint.py
+        run: uv run --with pyinstaller pyinstaller --onefile --name pixelsup entrypoint.py
 
       - name: Prepare release asset
-        shell: bash
         run: |
           mkdir -p release
           cp "dist/${{ matrix.bin_name }}" "release/${{ matrix.asset_name }}"

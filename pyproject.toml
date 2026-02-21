@@ -3,6 +3,7 @@ name = "pixelsup"
 version = "0.1.0"
 description = "Convert Blu-ray SUP subtitles into vertical sprite sheets with timeline mapping."
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.14"
 dependencies = [
     "pillow>=11.0.0",
