@@ -42,8 +42,14 @@ jobs:
           pip install .
 
       - name: Create entrypoint
+        shell: bash
         run: |
-          python -c "from pathlib import Path; Path('entrypoint.py').write_text('from pixelsup.cli import main\nif __name__ == \"__main__\":\n    main()\n', encoding='utf-8')"
+          cat > entrypoint.py <<'PY'
+          from pixelsup.cli import main
+
+          if __name__ == "__main__":
+              main()
+          PY
 
       - name: Build binary
         run: pyinstaller --onefile --name pixelsup entrypoint.py
