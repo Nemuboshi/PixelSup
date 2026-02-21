@@ -21,15 +21,22 @@ No Python environment:
 ## Usage
 
 ```bash
-uv run -m pixelsup.cli parser input.sup --limit 40 --gap 12 --max-width 1080 --padding 10 --keep-temp
-uv run -m pixelsup.cli parser input.idx --limit 40 --gap 12 --max-width 1080 --padding 10
-uv run -m pixelsup.cli ocr ./output_dir --config ./ocr_config.yaml
+uv run pixelsup parser input.sup --limit 40 --gap 12 --max-width 1080 --padding 10 --keep-temp
+uv run pixelsup parser input.idx --limit 40 --gap 12 --max-width 1080 --padding 10
+uv run pixelsup ocr ./output_dir --config ./ocr_config.yaml
 ```
 
 By default, each sheet includes large row index labels in a left-side gutter.
 Use `--no-row-index` to disable this.
 
-Or install and use the script entrypoint:
+Or use Python module mode:
+
+```bash
+python -m pixelsup parser input.sup -o output_dir
+python -m pixelsup ocr output_dir --config ocr_config.yaml
+```
+
+If installed into environment PATH, you can also call directly:
 
 ```bash
 pixelsup parser input.sup -o output_dir

@@ -137,16 +137,17 @@ def _render_object(defn: PgsObjectDefinition, palette: dict[int, PgsPaletteEntry
     # Convert palette indexes into RGBA pixels through YCbCr->RGB conversion.
     indices = _decode_rle_indices(defn.rle_data, defn.width, defn.height)
     rgba = Image.new("RGBA", (defn.width, defn.height), (0, 0, 0, 0))
-    px = rgba.load()
+    pixels: list[tuple[int, int, int, int]] = []
     for y in range(defn.height):
         row = y * defn.width
         for x in range(defn.width):
             idx = indices[row + x]
             entry = palette.get(idx)
             if entry is None:
-                px[x, y] = (0, 0, 0, 0)
+                pixels.append((0, 0, 0, 0))
             else:
-                px[x, y] = _ycbcr_to_rgba(entry.y, entry.cb, entry.cr, entry.alpha)
+                pixels.append(_ycbcr_to_rgba(entry.y, entry.cb, entry.cr, entry.alpha))
+    rgba.putdata(pixels)
     return rgba
 
 

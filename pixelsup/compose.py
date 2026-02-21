@@ -81,11 +81,13 @@ def compose_sheets(
             if show_row_index and font is not None:
                 label = str(cue.index)
                 left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
-                text_w = right - left
-                text_h = bottom - top
+                left_i = int(round(left))
+                top_i = int(round(top))
+                text_w = int(round(right - left))
+                text_h = int(round(bottom - top))
                 box_y = y + max(0, (cue.image.height - index_box_size) // 2)
-                tx = max(0, (gutter_width - text_w) // 2) - left
-                ty = box_y + max(0, (index_box_size - text_h) // 2) - top
+                tx = max(0, (gutter_width - text_w) // 2) - left_i
+                ty = box_y + max(0, (index_box_size - text_h) // 2) - top_i
                 draw.text((tx, ty), label, fill=(255, 255, 255), font=font)
             placements[cue.index] = CuePlacement(sheet_name=f"sheet_{sheet_idx:04d}.png", position_in_sheet=pos)
             y += cue.image.height

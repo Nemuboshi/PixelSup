@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
 [project]
 name = "pixelsup"
 version = "0.1.0"
@@ -14,3 +18,12 @@ dependencies = [
 
 [project.scripts]
 pixelsup = "pixelsup.cli:main"
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "pyrefly>=0.53.0",
+    "ruff>=0.15.2",
+]

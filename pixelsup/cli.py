@@ -5,6 +5,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
+from PIL import Image
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from .compose import compose_sheets
@@ -14,6 +15,8 @@ from .models import SubtitleCue
 from .ocr import run_ocr_on_output
 from .sup_parser import parse_sup
 from .timeline import write_mapping_json, write_srt
+
+SUPPORTED_IMAGE_SEQUENCE_SUFFIXES = {".png", ".jpg"}
 
 
 def build_parser_command() -> argparse.ArgumentParser:
@@ -27,12 +30,17 @@ def build_parser_command() -> argparse.ArgumentParser:
             "Examples:\n"
             "  pixelsup parser input.sup\n"
             "  pixelsup parser input.idx\n"
+            "  pixelsup parser ./frames_png\n"
             "  pixelsup parser input.sup --limit 20 --gap 12 --padding 10 --max-width 1080 --keep-temp\n"
             "  pixelsup parser input.idx --output ./out --force-white"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("input", type=Path, help="Input subtitle path (.sup or .idx with matching .sub).")
+    parser.add_argument(
+        "input",
+        type=Path,
+        help="Input path: .sup file, .idx file (with matching .sub), or a folder of consecutively numbered .png/.jpg files.",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -158,18 +166,71 @@ def _prepare_output_dir(output_dir: Path, keep_temp: bool) -> Path | None:
     return None
 
 
+def _collect_numbered_images(input_dir: Path) -> list[tuple[int, Path]]:
+    image_files = [p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_SEQUENCE_SUFFIXES]
+    if not image_files:
+        raise SystemExit(f"No .png/.jpg files found in directory: {input_dir}")
+
+    suffixes = {p.suffix.lower() for p in image_files}
+    if len(suffixes) != 1:
+        raise SystemExit("Image directory must use a single format only (all .png or all .jpg).")
+
+    numbered: list[tuple[int, Path]] = []
+    for path in image_files:
+        if not path.stem.isdigit():
+            raise SystemExit(f"Image filename must be purely numeric (e.g. 001.png): {path.name}")
+        numbered.append((int(path.stem), path))
+
+    numbered.sort(key=lambda item: item[0])
+    for i in range(1, len(numbered)):
+        if numbered[i][0] == numbered[i - 1][0]:
+            raise SystemExit(f"Duplicate image number detected: {numbered[i][0]}")
+
+    expected = numbered[0][0]
+    for number, _ in numbered:
+        if number != expected:
+            raise SystemExit(f"Image numbers must be consecutive with no gaps; missing number: {expected}")
+        expected += 1
+
+    return numbered
+
+
+def load_cues_from_image_dir(
+    input_dir: Path,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[SubtitleCue]:
+    numbered_images = _collect_numbered_images(input_dir)
+    cues: list[SubtitleCue] = []
+    total = len(numbered_images)
+    for done, (number, image_path) in enumerate(numbered_images, start=1):
+        with Image.open(image_path) as image:
+            rgba = image.convert("RGBA")
+        cues.append(
+            SubtitleCue(
+                index=number,
+                start_ms=(done - 1) * 1000,
+                end_ms=done * 1000,
+                image=rgba,
+            )
+        )
+        if progress_cb is not None:
+            progress_cb(done, total)
+    return cues
+
+
 def _process_cues(
     cues: list[SubtitleCue],
     max_width: int,
     force_white: bool,
     padding: int,
+    use_solid_bg_crop_fallback: bool,
     temp_dir: Path | None,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> list[SubtitleCue]:
     processed: list[SubtitleCue] = []
     total = len(cues)
     for idx, cue in enumerate(cues, start=1):
-        image = autocrop_nontransparent(cue.image)
+        image = autocrop_nontransparent(cue.image, solid_bg_fallback=use_solid_bg_crop_fallback)
         image = add_inner_padding(image, padding)
         image = resize_to_max_width(image, max_width)
         if force_white:
@@ -184,10 +245,12 @@ def _process_cues(
 
 def run(args: argparse.Namespace) -> int:
     input_path: Path = args.input
-    if not input_path.exists() or not input_path.is_file():
-        raise SystemExit(f"Input file not found: {input_path}")
-    if input_path.suffix.lower() not in (".sup", ".idx"):
-        raise SystemExit("Input must be a .sup file or .idx file")
+    if not input_path.exists():
+        raise SystemExit(f"Input path not found: {input_path}")
+    if not input_path.is_file() and not input_path.is_dir():
+        raise SystemExit(f"Input path must be a file or directory: {input_path}")
+    if input_path.is_file() and input_path.suffix.lower() not in (".sup", ".idx"):
+        raise SystemExit("Input file must be a .sup file or .idx file, or provide a directory of numbered images.")
     if args.limit <= 0:
         raise SystemExit("--limit must be > 0")
     if args.gap < 0:
@@ -197,7 +260,12 @@ def run(args: argparse.Namespace) -> int:
     if args.padding < 0:
         raise SystemExit("--padding must be >= 0")
 
-    output_dir = args.output or input_path.with_suffix("")
+    if args.output is not None:
+        output_dir = args.output
+    elif input_path.is_dir():
+        output_dir = input_path.parent / f"{input_path.name}_out"
+    else:
+        output_dir = input_path.with_suffix("")
     temp_dir = _prepare_output_dir(output_dir, args.keep_temp)
 
     with Progress(
@@ -207,11 +275,24 @@ def run(args: argparse.Namespace) -> int:
         TimeElapsedColumn(),
         TimeRemainingColumn(),
     ) as progress:
-        parse_task = progress.add_task("Subtitle Parsing", total=input_path.stat().st_size)
-        if input_path.suffix.lower() == ".sup":
-            cues = parse_sup(input_path, progress_cb=lambda done, total: progress.update(parse_task, completed=done, total=total))
+        if input_path.is_dir():
+            parse_task = progress.add_task("Image Sequence Loading", total=1)
+            cues = load_cues_from_image_dir(
+                input_path,
+                progress_cb=lambda done, total: progress.update(parse_task, completed=done, total=total),
+            )
         else:
-            cues = parse_idx_sub(input_path, progress_cb=lambda done, total: progress.update(parse_task, completed=done, total=total))
+            parse_task = progress.add_task("Subtitle Parsing", total=input_path.stat().st_size)
+            if input_path.suffix.lower() == ".sup":
+                cues = parse_sup(
+                    input_path,
+                    progress_cb=lambda done, total: progress.update(parse_task, completed=done, total=total),
+                )
+            else:
+                cues = parse_idx_sub(
+                    input_path,
+                    progress_cb=lambda done, total: progress.update(parse_task, completed=done, total=total),
+                )
         if not cues:
             raise SystemExit("No subtitle cues decoded from input.")
 
@@ -221,6 +302,7 @@ def run(args: argparse.Namespace) -> int:
             max_width=args.max_width,
             force_white=args.force_white,
             padding=args.padding,
+            use_solid_bg_crop_fallback=input_path.is_dir(),
             temp_dir=temp_dir,
             progress_cb=lambda done, total: progress.update(prep_task, completed=done, total=total),
         )

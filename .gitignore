@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 ocr_config.yaml
+
+# test temp files
+tests/.tmp

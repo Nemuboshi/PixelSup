@@ -25,6 +25,25 @@ class ImageOpsTest(unittest.TestCase):
         padded = add_inner_padding(img, 10)
         self.assertEqual(padded.size, (40, 30))
 
+    def test_autocrop_nontransparent_falls_back_to_solid_background(self) -> None:
+        img = Image.new("RGB", (12, 10), (0, 0, 0))
+        for x in range(3, 9):
+            for y in range(2, 8):
+                img.putpixel((x, y), (255, 255, 255))
+
+        cropped = autocrop_nontransparent(img, solid_bg_fallback=True)
+        self.assertEqual(cropped.size, (6, 6))
+
+    def test_autocrop_nontransparent_does_not_crop_non_uniform_background(self) -> None:
+        img = Image.new("RGB", (12, 10), (0, 0, 0))
+        img.putpixel((0, 0), (1, 1, 1))
+        for x in range(3, 9):
+            for y in range(2, 8):
+                img.putpixel((x, y), (255, 255, 255))
+
+        cropped = autocrop_nontransparent(img, solid_bg_fallback=True)
+        self.assertEqual(cropped.size, (12, 10))
+
 
 if __name__ == "__main__":
     unittest.main()
