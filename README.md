@@ -5,19 +5,25 @@ Convert Blu-ray `.sup` subtitles into:
 - `timeline.srt` (per-cue time with image marker text)
 - `mapping.json` (machine-readable mapping)
 
-Also supports VobSub `.idx + .sub` input (pass the `.idx` path; the matching `.sub` must be present).
+Also supports VobSub `.idx + .sub` input.
 
-The CLI shows rich progress bars for:
-- SUP parsing
-- image preprocessing
-- sheet composition
+## Install
+
+Recommended: use `uv`.
+
+```bash
+uv sync
+```
+
+No Python environment:
+- Download prebuilt binaries from GitHub `Releases`.
 
 ## Usage
 
 ```bash
-uv run -- python -m pixelsup.cli parser input.sup --limit 40 --gap 12 --max-width 1080 --padding 10 --keep-temp
-uv run -- python -m pixelsup.cli parser input.idx --limit 40 --gap 12 --max-width 1080 --padding 10
-uv run -- python -m pixelsup.cli ocr ./output_dir --config ./ocr_config.yaml
+uv run -m pixelsup.cli parser input.sup --limit 40 --gap 12 --max-width 1080 --padding 10 --keep-temp
+uv run -m pixelsup.cli parser input.idx --limit 40 --gap 12 --max-width 1080 --padding 10
+uv run -m pixelsup.cli ocr ./output_dir --config ./ocr_config.yaml
 ```
 
 By default, each sheet includes large row index labels in a left-side gutter.
