@@ -1,2 +1,0 @@
-"""pixelsup package."""
-
