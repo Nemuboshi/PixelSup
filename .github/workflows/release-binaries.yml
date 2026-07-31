@@ -4,14 +4,20 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to publish (required for manual runs, e.g. v1.2.3)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm_suffix }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -19,47 +25,130 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            asset_name: pixelsup-linux-x64
-            bin_name: pixelsup
-          - os: macos-latest
-            asset_name: pixelsup-macos-x64
-            bin_name: pixelsup
-          - os: windows-latest
-            asset_name: pixelsup-windows-x64.exe
-            bin_name: pixelsup.exe
+          - goos: linux
+            goarch: amd64
+            goarm: ""
+            goarm_suffix: ""
+          - goos: linux
+            goarch: arm64
+            goarm: ""
+            goarm_suffix: ""
+          - goos: windows
+            goarch: amd64
+            goarm: ""
+            goarm_suffix: ""
+          - goos: windows
+            goarch: arm64
+            goarm: ""
+            goarm_suffix: ""
+          - goos: darwin
+            goarch: amd64
+            goarm: ""
+            goarm_suffix: ""
+          - goos: darwin
+            goarch: arm64
+            goarm: ""
+            goarm_suffix: ""
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-      - name: Install Python
-        run: uv python install 3.14
+      - name: Install UPX
+        uses: crazy-max/ghaction-upx@v3
+        with:
+          install-only: true
 
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Create entrypoint
+      - name: Build binary (optimized)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
         run: |
-          cat > entrypoint.py <<'PY'
-          from pixelsup.cli import main
+          set -euo pipefail
+          mkdir -p dist
 
-          if __name__ == "__main__":
-              main()
-          PY
+          suffix=""
+          if [[ "${GOOS}" == "windows" ]]; then
+            suffix=".exe"
+          fi
+          arm_suffix=""
+          if [[ "${GOARCH}" == "arm" && -n "${GOARM}" ]]; then
+            arm_suffix="v${GOARM}"
+          fi
 
-      - name: Build binary
-        run: uv run --with pyinstaller pyinstaller --onefile --name pixelsup entrypoint.py
+          out="dist/pixelsup-${GOOS}-${GOARCH}${arm_suffix}${suffix}"
+          go build \
+            -trimpath \
+            -buildvcs=false \
+            -tags "netgo,osusergo" \
+            -ldflags "-s -w -buildid=" \
+            -o "${out}" \
+            ./cmd/pixelsup
 
-      - name: Prepare release asset
+          cp "${out}" "${out}.orig"
+          if upx --best --lzma "${out}"; then
+            echo "UPX succeeded for ${out}"
+            rm -f "${out}.orig"
+          else
+            echo "UPX failed for ${out}, using uncompressed binary"
+            mv -f "${out}.orig" "${out}"
+          fi
+
+      - name: Package asset
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
         run: |
+          set -euo pipefail
           mkdir -p release
-          cp "dist/${{ matrix.bin_name }}" "release/${{ matrix.asset_name }}"
+          arm_suffix=""
+          if [[ "${GOARCH}" == "arm" && -n "${GOARM}" ]]; then
+            arm_suffix="v${GOARM}"
+          fi
 
-      - name: Upload release assets
+          base="pixelsup-${GOOS}-${GOARCH}${arm_suffix}"
+          if [[ "${GOOS}" == "windows" ]]; then
+            bin="dist/${base}.exe"
+            archive="release/${base}.zip"
+            (cd dist && zip -9 -q "../${archive}" "$(basename "${bin}")")
+          else
+            bin="dist/${base}"
+            archive="release/${base}.tar.gz"
+            tar -C dist -czf "${archive}" "$(basename "${bin}")"
+          fi
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm_suffix }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: release/${{ matrix.asset_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || github.ref_name }}
+          files: release-artifacts/*
+          generate_release_notes: true

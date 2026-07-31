@@ -1,7 +1,17 @@
 ocr:
+  provider: "openai_llm" # openai_llm | paddle_ocr
+  max_concurrency: 4
+
+openai_llm:
   api_base: "https://api.example.com/v1"
   api_key: "token-test"
   model: "A/B-C"
+  max_tokens: 8192 # optional, but recommended for long sheets
   timeout_seconds: 120
   max_retries: 2
   retry_backoff_seconds: 1.0
+  prompt_template: ""
+
+paddle_ocr:
+  api_url: "https://q68drf0aje9ay2rd.aistudio-app.com/ocr"
+  token: "token-test"

@@ -1,51 +1,72 @@
-## PixelSup
+﻿## PixelSup
 
-Convert Blu-ray `.sup` subtitles into:
-- vertical sprite sheets (`sheet_0001.png`, ...)
-- `timeline.srt` (per-cue time with image marker text)
-- `mapping.json` (machine-readable mapping)
+PixelSup converts subtitle sources into image sheets and timeline files.
 
-Also supports VobSub `.idx + .sub` input.
+Supported input:
+- Blu-ray `.sup`
+- VobSub `.idx + .sub`
 
-## Install
+Main output:
+- `sheet_*.png`
+- `timeline.srt`
+- `mapping.json`
 
-Recommended: use `uv`.
+## Quick Start (Prebuilt Binary)
 
-```bash
-uv sync
-```
+1. Download the latest binary from GitHub `Releases`.
+2. Unzip it and run from terminal.
 
-No Python environment:
-- Download prebuilt binaries from GitHub `Releases`.
-
-## Usage
+Examples:
 
 ```bash
-uv run pixelsup parser input.sup --limit 40 --gap 12 --max-width 1080 --padding 10 --keep-temp
-uv run pixelsup parser input.idx --limit 40 --gap 12 --max-width 1080 --padding 10
-uv run pixelsup ocr ./output_dir --config ./ocr_config.yaml
+<binary> parse input.sup -o out
+<binary> parse input.idx -o out
+<binary> export input.idx -o out_export
+<binary> ocr out --config ./ocr_config.yaml
+<binary> ocr out --config ./ocr_config.yaml --strict
 ```
 
-By default, each sheet includes large row index labels in a left-side gutter.
-Use `--no-row-index` to disable this.
+## Commands
 
-Or use Python module mode:
+```text
+parse   Parse .sup, .idx(+.sub), or image dirs into sheets + timeline outputs.
+export  Export .sup/.idx cues as per-cue PNG files with timeline outputs.
+ocr     Run OCR on composed sheets and write subtitle text.
+```
+
+`ocr` provider is selected in `ocr_config.yaml` via `ocr.provider`.
+Both providers now read the digits-composed `sheet_*.png` output and split subtitle lines with the embedded `0123456789` separator.
+
+Sample config structure:
+
+```yaml
+ocr:
+  provider: "openai_llm"
+  max_concurrency: 4
+
+openai_llm:
+  api_base: "https://api.example.com/v1"
+  api_key: "token-test"
+  model: "A/B-C"
+  max_tokens: 8192
+
+paddle_ocr:
+  api_url: "https://q68drf0aje9ay2rd.aistudio-app.com/ocr"
+  token: "token-test"
+```
+
+Use help for full options:
 
 ```bash
-python -m pixelsup parser input.sup -o output_dir
-python -m pixelsup ocr output_dir --config ocr_config.yaml
+<binary> --help
+<binary> parse --help
+<binary> export --help
+<binary> ocr --help
 ```
 
-If installed into environment PATH, you can also call directly:
+## Optional: Build from Source
 
 ```bash
-pixelsup parser input.sup -o output_dir
-pixelsup ocr output_dir --config ocr_config.yaml
+go build ./cmd/pixelsup
 ```
 
-## Output
-
-- `sheet_*.png`: black background, white spacing between rows
-- `timeline.srt`: each subtitle keeps original timing and uses marker text like `[img:sheet_0001.png#03]`
-- `mapping.json`: per-cue mapping (sheet, position, start/end ms)
-- `temp/*.png`: kept only with `--keep-temp`
