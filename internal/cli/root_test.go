@@ -452,11 +452,8 @@ func TestExecute_ParseSuccess_WritesDigitsArtifacts(t *testing.T) {
 			t.Fatalf("%s was not generated in digits mode: %v", filename, statErr)
 		}
 	}
-	if !strings.Contains(out.String(), "Composing digits") {
-		t.Fatalf("expected digits compose progress label, got %q", out.String())
-	}
-	if strings.Contains(out.String(), "Composing sheets") {
-		t.Fatalf("digits mode should not report sheet compose label, got %q", out.String())
+	if !strings.Contains(out.String(), "Composing sheets") {
+		t.Fatalf("expected sheet compose progress label, got %q", out.String())
 	}
 }
 

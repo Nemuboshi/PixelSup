@@ -20,10 +20,11 @@ Examples:
 
 ```bash
 <binary> parse input.sup -o out
-<binary> parse input.idx -o out
+<binary> parse input.idx -o out --layout digits
+<binary> parse input.idx -o out_no_index --layout no-row-index
 <binary> export input.idx -o out_export
-<binary> ocr out --config ./ocr_config.yaml
 <binary> ocr out --config ./ocr_config.yaml --strict
+<binary> ocr out --config ./dist/ocr_config.yaml --dump-paddle-responses ./ocr-responses
 ```
 
 ## Commands
@@ -35,7 +36,7 @@ ocr     Run OCR on composed sheets and write subtitle text.
 ```
 
 `ocr` provider is selected in `ocr_config.yaml` via `ocr.provider`.
-Both providers now read the digits-composed `sheet_*.png` output and split subtitle lines with the embedded `0123456789` separator.
+`parse --layout` selects the sheet format: `digits` (default) inserts `0123456789` between cues for OCR; `no-row-index` keeps plain white gaps without a left index gutter. `ocr --dump-paddle-responses <dir>` saves PaddleOCR submission, polling, and result responses as JSONL files, one file per sheet.
 
 Sample config structure:
 
@@ -51,8 +52,9 @@ openai_llm:
   max_tokens: 8192
 
 paddle_ocr:
-  api_url: "https://q68drf0aje9ay2rd.aistudio-app.com/ocr"
+  api_url: "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
   token: "token-test"
+  model: "PP-OCRv6"
 ```
 
 Use help for full options:

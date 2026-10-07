@@ -39,17 +39,20 @@ type PlacedSheet struct {
 	CueIndexes []int
 }
 
-// ComposeSheetsWithDigitSeparator stacks cues vertically and inserts a synthetic
-// separator row containing "0123456789" between adjacent cues.
-//
-// Unlike ComposeSheets, this mode does not draw per-row index gutters. Cue
-// placement metadata remains identical: PositionInSheet counts only real cues.
-// separatorHeight acts as a lower bound for each separator row. Actual separator
-// height is unified per sheet as max(separatorHeight, min cue height in chunk).
-func ComposeSheetsWithDigitSeparator(
+type SheetLayout string
+
+const (
+	LayoutDigits     SheetLayout = "digits"
+	LayoutNoRowIndex SheetLayout = "no-row-index"
+)
+
+// ComposeSheets stacks cues into OCR sheets using either a digit separator or
+// plain white row gaps without an index gutter.
+func ComposeSheets(
 	cues []model.RenderedCue,
 	limit int,
 	separatorHeight int,
+	layout SheetLayout,
 	progress ProgressFunc,
 ) ([]PlacedSheet, map[int]model.CuePlacement, error) {
 	if limit <= 0 {
@@ -57,6 +60,9 @@ func ComposeSheetsWithDigitSeparator(
 	}
 	if separatorHeight < 0 {
 		return nil, nil, fmt.Errorf("separatorHeight must be >= 0")
+	}
+	if layout != LayoutDigits && layout != LayoutNoRowIndex {
+		return nil, nil, fmt.Errorf("unknown sheet layout %q", layout)
 	}
 
 	sheets := make([]PlacedSheet, 0, (len(cues)+limit-1)/limit)
@@ -95,11 +101,16 @@ func ComposeSheetsWithDigitSeparator(
 				minCueHeight = h
 			}
 		}
-		separatorRowHeight := minCueHeight
-		if separatorRowHeight < separatorHeight {
-			separatorRowHeight = separatorHeight
+
+		rowGap := separatorHeight
+		if layout == LayoutDigits && rowGap < minCueHeight {
+			rowGap = minCueHeight
 		}
-		totalHeight += separatorRowHeight * len(chunk)
+		if layout == LayoutDigits {
+			totalHeight += rowGap * len(chunk)
+		} else {
+			totalHeight += rowGap * (len(chunk) - 1)
+		}
 
 		canvas := image.NewRGBA(image.Rect(0, 0, maxWidth, totalHeight))
 		fillRect(canvas, canvas.Bounds(), black)
@@ -121,9 +132,14 @@ func ComposeSheetsWithDigitSeparator(
 			cueIndexes = append(cueIndexes, cue.Cue.Index)
 
 			y += h
-			sepRect := image.Rect(0, y, canvas.Bounds().Dx(), y+separatorRowHeight)
-			drawDigitSeparatorRow(canvas, sepRect)
-			y += separatorRowHeight
+			if layout == LayoutDigits {
+				sepRect := image.Rect(0, y, canvas.Bounds().Dx(), y+rowGap)
+				drawDigitSeparatorRow(canvas, sepRect)
+				y += rowGap
+			} else if pos+1 < len(chunk) {
+				fillRect(canvas, image.Rect(0, y, canvas.Bounds().Dx(), y+rowGap), white)
+				y += rowGap
+			}
 		}
 
 		sheets = append(sheets, PlacedSheet{
@@ -137,6 +153,16 @@ func ComposeSheetsWithDigitSeparator(
 	}
 
 	return sheets, placements, nil
+}
+
+// ComposeSheetsWithDigitSeparator keeps the original digits-composed API.
+func ComposeSheetsWithDigitSeparator(
+	cues []model.RenderedCue,
+	limit int,
+	separatorHeight int,
+	progress ProgressFunc,
+) ([]PlacedSheet, map[int]model.CuePlacement, error) {
+	return ComposeSheets(cues, limit, separatorHeight, LayoutDigits, progress)
 }
 
 // fillRect paints a solid color in RGBA space with explicit clipping.

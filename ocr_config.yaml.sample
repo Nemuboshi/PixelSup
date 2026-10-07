@@ -13,5 +13,6 @@ openai_llm:
   prompt_template: ""
 
 paddle_ocr:
-  api_url: "https://q68drf0aje9ay2rd.aistudio-app.com/ocr"
+  api_url: "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
   token: "token-test"
+  model: "PP-OCRv6"

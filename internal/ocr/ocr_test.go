@@ -2,7 +2,6 @@ package ocr
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1011,44 +1010,46 @@ func TestPaddleSheetTextReconstructsLinesFromPrunedTextBoxes(t *testing.T) {
 	writeTinyPNG(t, imagePath)
 
 	mux := http.NewServeMux()
+	var server *httptest.Server
 	mux.HandleFunc("/ocr", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("unexpected method: %s", r.Method)
 		}
-		if got := r.Header.Get("Authorization"); got != "token test-token" {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Fatalf("unexpected auth header: %q", got)
 		}
-		if got := r.Header.Get("Content-Type"); got != "application/json" {
+		if got := r.Header.Get("Content-Type"); !strings.HasPrefix(got, "multipart/form-data;") {
 			t.Fatalf("unexpected content-type: %q", got)
 		}
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode request: %v", err)
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("parse multipart form: %v", err)
 		}
-		if payload["fileType"] != float64(1) {
-			t.Fatalf("unexpected fileType: %#v", payload["fileType"])
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("missing file upload: %v", err)
 		}
-		if payload["useTextlineOrientation"] != false {
-			t.Fatalf("unexpected useTextlineOrientation: %#v", payload["useTextlineOrientation"])
+		_ = file.Close()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"jobId":"job-1"}}`)
+	})
+	mux.HandleFunc("/ocr/job-1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("unexpected poll method: %s", r.Method)
 		}
-		fileData, ok := payload["file"].(string)
-		if !ok || fileData == "" {
-			t.Fatalf("missing file payload: %#v", payload["file"])
-		}
-		if _, err := base64.StdEncoding.DecodeString(fileData); err != nil {
-			t.Fatalf("invalid base64 payload: %v", err)
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("unexpected poll auth header: %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"data":{"state":"done","resultUrl":{"jsonUrl":%q}}}`, server.URL+"/result")
+	})
+	mux.HandleFunc("/result", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/jsonl")
 		_, _ = io.WriteString(w, `{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["第一","行","0123456789","第二行"],"rec_boxes":[[10,10,30,20],[35,11,55,21],[10,40,100,52],[10,70,80,82]],"dt_polys":[[[10,10],[30,10],[30,20],[10,20]],[[35,11],[55,11],[55,21],[35,21]],[[10,40],[100,40],[100,52],[10,52]],[[10,70],[80,70],[80,82],[10,82]]]}}]}}`)
 	})
-	server := httptest.NewServer(mux)
+	server = httptest.NewServer(mux)
 	defer server.Close()
 
-	cfg := PaddleOCRConfig{
-		APIURL: server.URL + "/ocr",
-		Token:  "test-token",
-	}
-
+	cfg := PaddleOCRConfig{APIURL: server.URL + "/ocr", Token: "test-token"}
 	text, err := paddleSheetText(cfg, imagePath, 2)
 	if err != nil {
 		t.Fatalf("paddle sheet text: %v", err)
@@ -1103,23 +1104,8 @@ func TestPaddleSheetTextRejectsInvalidResponseJSON(t *testing.T) {
 	}
 }
 
-func TestPaddleSheetTextRejectsMissingPrunedResultGeometry(t *testing.T) {
-	root := t.TempDir()
-	imagePath := filepath.Join(root, "sheet_0001.png")
-	writeTinyPNG(t, imagePath)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["第一行"]}}]}}`)
-	}))
-	defer server.Close()
-
-	cfg := PaddleOCRConfig{
-		APIURL: server.URL + "/ocr",
-		Token:  "test-token",
-	}
-
-	_, err := paddleSheetText(cfg, imagePath, 1)
+func TestExtractTextFromPaddleResponseRejectsMissingPrunedResultGeometry(t *testing.T) {
+	_, err := extractTextFromPaddleResponse([]byte(`{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["第一行"]}}]}}`))
 	if err == nil || !strings.Contains(err.Error(), "missing prunedResult.rec_boxes") {
 		t.Fatalf("unexpected error: %v", err)
 	}

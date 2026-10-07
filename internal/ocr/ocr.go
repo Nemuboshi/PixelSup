@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"math"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,8 +51,10 @@ type OpenAILLMConfig struct {
 }
 
 type PaddleOCRConfig struct {
-	APIURL string
-	Token  string
+	APIURL           string
+	Token            string
+	Model            string
+	ResponseDumpPath string
 }
 
 // ProgressFunc reports per-sheet OCR progress while RunOCROnOutput iterates sheets.
@@ -62,6 +67,9 @@ const defaultOpenAIMaxTokens = 8192
 const defaultOCRMaxConcurrency = 4
 const strictSplitMaxAttempts = 5
 const paddleTimeoutSeconds = 120
+const defaultPaddleJobURL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
+const defaultPaddleModel = "PP-OCRv6"
+const paddlePollInterval = 5 * time.Second
 const paddleMaxRetries = 2
 const paddleRetryBackoffSeconds = 1.0
 const paddleUseDocOrientationClassify = false
@@ -167,6 +175,7 @@ func LoadOCRConfig(path string) (OCRConfig, error) {
 		PaddleOCR struct {
 			APIURL string `yaml:"api_url"`
 			Token  string `yaml:"token"`
+			Model  string `yaml:"model"`
 		} `yaml:"paddle_ocr"`
 	}
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
@@ -198,7 +207,14 @@ func LoadOCRConfig(path string) (OCRConfig, error) {
 	}
 
 	cfg.PaddleOCR.APIURL = strings.TrimRight(strings.TrimSpace(doc.PaddleOCR.APIURL), "/")
+	if cfg.PaddleOCR.APIURL == "" {
+		cfg.PaddleOCR.APIURL = defaultPaddleJobURL
+	}
 	cfg.PaddleOCR.Token = strings.TrimSpace(doc.PaddleOCR.Token)
+	cfg.PaddleOCR.Model = strings.TrimSpace(doc.PaddleOCR.Model)
+	if cfg.PaddleOCR.Model == "" {
+		cfg.PaddleOCR.Model = defaultPaddleModel
+	}
 
 	if cfg.MaxConcurrency <= 0 {
 		return OCRConfig{}, errors.New("ocr.max_concurrency must be > 0")
@@ -572,50 +588,246 @@ func paddleSheetTextWithRetry(config PaddleOCRConfig, imagePath string, expected
 }
 
 func paddleSheetText(config PaddleOCRConfig, imagePath string, _ int) (string, error) {
-	raw, err := os.ReadFile(imagePath)
+	file, err := os.Open(imagePath)
 	if err != nil {
-		return "", fmt.Errorf("read sheet image %s: %w", imagePath, err)
+		return "", fmt.Errorf("open sheet image %s: %w", imagePath, err)
 	}
-	payload := map[string]any{
-		"file":                      base64.StdEncoding.EncodeToString(raw),
-		"fileType":                  1,
-		"useDocOrientationClassify": paddleUseDocOrientationClassify,
-		"useDocUnwarping":           paddleUseDocUnwarping,
-		"useTextlineOrientation":    paddleUseTextlineOrientation,
+	defer file.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("model", config.Model); err != nil {
+		return "", err
 	}
-	body, err := json.Marshal(payload)
+	optional, _ := json.Marshal(map[string]bool{
+		"useDocOrientationClassify": false,
+		"useDocUnwarping":           false,
+		"useTextlineOrientation":    false,
+	})
+	if err := writer.WriteField("optionalPayload", string(optional)); err != nil {
+		return "", err
+	}
+	part, err := writer.CreateFormFile("file", filepath.Base(imagePath))
 	if err != nil {
-		return "", fmt.Errorf("marshal paddle OCR request payload: %w", err)
+		return "", err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return "", fmt.Errorf("write paddle OCR upload: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return "", err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(paddleTimeoutSeconds)*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, config.APIURL, bytes.NewReader(body))
+	client := getHTTPClient(paddleTimeoutSeconds)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, config.APIURL, &body)
 	if err != nil {
 		return "", fmt.Errorf("build paddle OCR request: %w", err)
 	}
-	req.Header.Set("Authorization", "token "+config.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := getHTTPClient(paddleTimeoutSeconds).Do(req)
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("paddle OCR request failed at %s: %w", config.APIURL, err)
+		return "", fmt.Errorf("submit paddle OCR job at %s: %w", config.APIURL, err)
 	}
+	var submitted struct {
+		Data struct {
+			JobID string `json:"jobId"`
+		} `json:"data"`
+	}
+	if err := decodePaddleResponse(resp, &submitted, config.APIURL, config.ResponseDumpPath, "submit"); err != nil {
+		return "", err
+	}
+	if submitted.Data.JobID == "" {
+		return "", &ocrSchemaError{Message: "decode paddle OCR response: missing data.jobId"}
+	}
+
+	for {
+		pollURL := config.APIURL + "/" + url.PathEscape(submitted.Data.JobID)
+		pollReq, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+		if err != nil {
+			return "", err
+		}
+		pollReq.Header.Set("Authorization", "Bearer "+config.Token)
+		var status struct {
+			Data struct {
+				State  string `json:"state"`
+				Error  string `json:"errorMsg"`
+				Result struct {
+					JSONURL string `json:"jsonUrl"`
+				} `json:"resultUrl"`
+			} `json:"data"`
+		}
+		resp, err = client.Do(pollReq)
+		if err != nil {
+			return "", fmt.Errorf("poll paddle OCR job: %w", err)
+		}
+		if err := decodePaddleResponse(resp, &status, pollURL, config.ResponseDumpPath, "poll"); err != nil {
+			return "", err
+		}
+		switch status.Data.State {
+		case "pending", "running":
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(paddlePollInterval):
+			}
+		case "failed":
+			return "", fmt.Errorf("paddle OCR job failed: %s", status.Data.Error)
+		case "done":
+			if status.Data.Result.JSONURL == "" {
+				return "", &ocrSchemaError{Message: "decode paddle OCR response: missing data.resultUrl.jsonUrl"}
+			}
+			return downloadPaddleMarkdown(ctx, client, status.Data.Result.JSONURL, config.ResponseDumpPath)
+		default:
+			return "", &ocrSchemaError{Message: "decode paddle OCR response: unexpected job state " + status.Data.State}
+		}
+	}
+}
+
+func decodePaddleResponse(resp *http.Response, dst any, requestURL, dumpPath, stage string) error {
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxOCRResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxOCRResponseBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("read paddle OCR response: %w", err)
+		return fmt.Errorf("read paddle OCR response: %w", err)
 	}
-	if len(respBody) > maxOCRResponseBytes {
-		return "", &ocrSchemaError{Message: fmt.Sprintf("paddle OCR response body too large (> %d bytes)", maxOCRResponseBytes)}
+	if err := appendPaddleResponseJSONL(dumpPath, stage, resp.StatusCode, requestURL, raw); err != nil {
+		return fmt.Errorf("write PaddleOCR response dump: %w", err)
+	}
+	if len(raw) > maxOCRResponseBytes {
+		return &ocrSchemaError{Message: "paddle OCR response body too large"}
 	}
 	if resp.StatusCode >= 400 {
-		detail := strings.TrimSpace(string(respBody))
+		detail := strings.TrimSpace(string(raw))
 		if len(detail) > 500 {
 			detail = detail[:500]
 		}
-		return "", &ocrHTTPStatusError{StatusCode: resp.StatusCode, URL: config.APIURL, Detail: detail}
+		return &ocrHTTPStatusError{StatusCode: resp.StatusCode, URL: requestURL, Detail: detail}
 	}
-	return extractTextFromPaddleResponse(respBody)
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return fmt.Errorf("decode paddle OCR response: %w", err)
+	}
+	return nil
+}
+
+type paddleResponseDumpRecord struct {
+	Stage      string          `json:"stage"`
+	StatusCode int             `json:"status_code"`
+	URL        string          `json:"url"`
+	Body       json.RawMessage `json:"body,omitempty"`
+	BodyText   string          `json:"body_text,omitempty"`
+}
+
+func appendPaddleResponseJSONL(path, stage string, statusCode int, responseURL string, raw []byte) error {
+	if path == "" {
+		return nil
+	}
+	record := paddleResponseDumpRecord{Stage: stage, StatusCode: statusCode, URL: responseURL}
+	if json.Valid(raw) {
+		record.Body = json.RawMessage(raw)
+	} else {
+		record.BodyText = string(raw)
+	}
+	line, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	_, writeErr := file.Write(line)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
+}
+
+func downloadPaddleMarkdown(ctx context.Context, client *http.Client, resultURL, dumpPath string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resultURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download paddle OCR result: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxOCRResponseBytes+1))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		if err := appendPaddleResponseJSONL(dumpPath, "result", resp.StatusCode, resultURL, line); err != nil {
+			return "", fmt.Errorf("write PaddleOCR response dump: %w", err)
+		}
+	}
+	if resp.StatusCode >= 400 {
+		return "", &ocrHTTPStatusError{StatusCode: resp.StatusCode, URL: resultURL}
+	}
+	if len(raw) > maxOCRResponseBytes {
+		return "", &ocrSchemaError{Message: "paddle OCR result too large"}
+	}
+	var text strings.Builder
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var row struct {
+			Result struct {
+				OCRResults []struct {
+					PrunedResult struct {
+						RecTexts []string      `json:"rec_texts"`
+						RecBoxes [][]float64   `json:"rec_boxes"`
+						DTPolys  [][][]float64 `json:"dt_polys"`
+					} `json:"prunedResult"`
+				} `json:"ocrResults"`
+				Layout []struct {
+					Markdown struct {
+						Text string `json:"text"`
+					} `json:"markdown"`
+				} `json:"layoutParsingResults"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			return "", fmt.Errorf("decode paddle OCR JSONL result: %w", err)
+		}
+		if len(row.Result.OCRResults) > 0 {
+			resultJSON, err := json.Marshal(map[string]any{"result": row.Result})
+			if err != nil {
+				return "", err
+			}
+			pageText, err := extractTextFromPaddleResponse(resultJSON)
+			if err != nil {
+				return "", err
+			}
+			if text.Len() > 0 && pageText != "" {
+				text.WriteString("\n")
+			}
+			text.WriteString(pageText)
+			continue
+		}
+		for _, page := range row.Result.Layout {
+			if text.Len() > 0 {
+				text.WriteString("\n")
+			}
+			text.WriteString(paddleMarkdownText(page.Markdown.Text))
+		}
+	}
+	return text.String(), nil
+}
+
+func paddleMarkdownText(markdown string) string {
+	text := regexp.MustCompile(`(?i)</(?:td|th|tr|p|div|li)>`).ReplaceAllString(markdown, "\n")
+	text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
+	text = html.UnescapeString(text)
+	return strings.TrimSpace(text)
 }
 
 func extractTextFromPaddleResponse(raw []byte) (string, error) {
@@ -811,9 +1023,21 @@ type mappingItem struct {
 }
 
 func RunOCROnOutput(outputDir, configPath string, strict bool, progressCB ProgressFunc) (string, error) {
+	return RunOCROnOutputWithDump(outputDir, configPath, strict, "", progressCB)
+}
+
+func RunOCROnOutputWithDump(outputDir, configPath string, strict bool, responseDumpDir string, progressCB ProgressFunc) (string, error) {
 	config, err := LoadOCRConfig(configPath)
 	if err != nil {
 		return "", err
+	}
+	if responseDumpDir != "" {
+		if config.Provider != ProviderPaddleOCR {
+			return "", errors.New("--dump-paddle-responses requires ocr.provider: paddle_ocr")
+		}
+		if err := os.MkdirAll(responseDumpDir, 0o755); err != nil {
+			return "", fmt.Errorf("create PaddleOCR response dump directory: %w", err)
+		}
 	}
 
 	mapPath := filepath.Join(outputDir, "mapping.json")
@@ -887,9 +1111,18 @@ func RunOCROnOutput(outputDir, configPath string, strict bool, progressCB Progre
 				}
 				sheetItems := bySheet[sheetName]
 				expectedCount := len(sheetItems)
+				paddleConfig := config.PaddleOCR
+				if responseDumpDir != "" {
+					base := strings.TrimSuffix(filepath.Base(sheetName), filepath.Ext(sheetName))
+					paddleConfig.ResponseDumpPath = filepath.Join(responseDumpDir, base+".jsonl")
+					if err := os.WriteFile(paddleConfig.ResponseDumpPath, nil, 0o644); err != nil {
+						results <- ocrResult{sheetName: sheetName, err: fmt.Errorf("create PaddleOCR response dump: %w", err)}
+						continue
+					}
+				}
 
 				if strict {
-					lines, strictErr := ocrStrictLines(config.Provider, config.OpenAILLM, config.PaddleOCR, sheetPath, expectedCount)
+					lines, strictErr := ocrStrictLines(config.Provider, config.OpenAILLM, paddleConfig, sheetPath, expectedCount)
 					if strictErr != nil {
 						var mismatchErr *ocrStrictSplitMismatchError
 						if errors.As(strictErr, &mismatchErr) {
@@ -912,7 +1145,7 @@ func RunOCROnOutput(outputDir, configPath string, strict bool, progressCB Progre
 				case ProviderOpenAILLM:
 					text, textErr = callOpenAIDigitsTextWithRetry(config.OpenAILLM, sheetPath, expectedCount)
 				case ProviderPaddleOCR:
-					text, textErr = callPaddleSheetTextWithRetry(config.PaddleOCR, sheetPath, expectedCount)
+					text, textErr = callPaddleSheetTextWithRetry(paddleConfig, sheetPath, expectedCount)
 				default:
 					textErr = fmt.Errorf("unsupported ocr provider: %s", config.Provider)
 				}

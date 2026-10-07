@@ -24,6 +24,7 @@ import (
 
 // runOCROnOutput is a test seam that defaults to the production OCR runner.
 var runOCROnOutput = ocr.RunOCROnOutput
+var runOCROnOutputWithDump = ocr.RunOCROnOutputWithDump
 var progressLineActive bool
 
 // Command is a lightweight command descriptor used in the initial migration phase.
@@ -135,6 +136,7 @@ type parserOptions struct {
 	limit      int
 	maxWidth   int
 	padding    int
+	layout     compose.SheetLayout
 	forceWhite bool
 }
 
@@ -201,11 +203,12 @@ func runParserCommand(args []string, out io.Writer) error {
 	progressDone(out)
 
 	const defaultDigitSeparatorHeight = 12
-	sheets, placements, err := compose.ComposeSheetsWithDigitSeparator(
+	sheets, placements, err := compose.ComposeSheets(
 		processed,
 		opts.limit,
 		defaultDigitSeparatorHeight,
-		func(done, total int) { progressLine(out, "Composing digits", done, total) },
+		opts.layout,
+		func(done, total int) { progressLine(out, "Composing sheets", done, total) },
 	)
 	if err != nil {
 		return fmt.Errorf("compose output: %w", err)
@@ -321,6 +324,7 @@ func runOCRCommand(args []string, out io.Writer) error {
 
 	outputDir := ""
 	configPath := "ocr_config.yaml"
+	responseDumpDir := ""
 	strict := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -333,6 +337,12 @@ func runOCRCommand(args []string, out io.Writer) error {
 			i++
 		case "--strict":
 			strict = true
+		case "--dump-paddle-responses":
+			if i+1 >= len(args) {
+				return errors.New("failed to parse ocr flags: flag needs an argument: --dump-paddle-responses")
+			}
+			responseDumpDir = args[i+1]
+			i++
 		case "-h", "--help":
 			writeOCRUsage(out)
 			return nil
@@ -351,9 +361,16 @@ func runOCRCommand(args []string, out io.Writer) error {
 		return errors.New("ocr requires one output directory argument")
 	}
 
-	outPath, err := runOCROnOutput(outputDir, configPath, strict, func(done, total int, _ string) {
+	progress := func(done, total int, _ string) {
 		progressLine(out, "OCR", done, total)
-	})
+	}
+	var outPath string
+	var err error
+	if responseDumpDir != "" {
+		outPath, err = runOCROnOutputWithDump(outputDir, configPath, strict, responseDumpDir, progress)
+	} else {
+		outPath, err = runOCROnOutput(outputDir, configPath, strict, progress)
+	}
 	if err != nil {
 		return err
 	}
@@ -382,11 +399,12 @@ func exportHelpFlagPresent(args []string) bool {
 
 func writeOCRUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage:")
-	_, _ = fmt.Fprintln(w, "  pixelsup-go ocr <output_dir> [--config <yaml>]")
+	_, _ = fmt.Fprintln(w, "  pixelsup-go ocr <output_dir> [--config <yaml>] [--strict] [--dump-paddle-responses <dir>]")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Options:")
 	_, _ = fmt.Fprintln(w, "  --config <yaml>  OCR config file path. Default: ./ocr_config.yaml")
 	_, _ = fmt.Fprintln(w, "  --strict         Require OCR split line count to match expected count; retry up to 5 times")
+	_, _ = fmt.Fprintln(w, "  --dump-paddle-responses <dir>  Save PaddleOCR HTTP responses as per-sheet JSONL files")
 	_, _ = fmt.Fprintln(w, "  -h, --help       Show ocr help")
 }
 
@@ -594,7 +612,7 @@ func parserHelpFlagPresent(args []string) bool {
 
 // parseParserArgs validates parse flags and returns parsed options.
 func parseParserArgs(args []string) (parserOptions, error) {
-	opts := parserOptions{limit: 6, maxWidth: 1080, padding: 10}
+	opts := parserOptions{limit: 6, maxWidth: 1080, padding: 10, layout: compose.LayoutDigits}
 	inputs := make([]string, 0, 1)
 
 	for i := 0; i < len(args); i++ {
@@ -615,6 +633,12 @@ func parseParserArgs(args []string) (parserOptions, error) {
 				return opts, errors.New("--limit must be an integer")
 			}
 			opts.limit = v
+			i++
+		case "--layout":
+			if i+1 >= len(args) {
+				return opts, errors.New("failed to parse parse flags: flag needs an argument: --layout")
+			}
+			opts.layout = compose.SheetLayout(args[i+1])
 			i++
 		case "--max-width":
 			if i+1 >= len(args) {
@@ -692,17 +716,21 @@ func validateParserOptions(opts parserOptions) error {
 	if opts.padding < 0 {
 		return errors.New("--padding must be >= 0")
 	}
+	if opts.layout != compose.LayoutDigits && opts.layout != compose.LayoutNoRowIndex {
+		return fmt.Errorf("--layout must be one of: %s, %s", compose.LayoutDigits, compose.LayoutNoRowIndex)
+	}
 	return nil
 }
 
 // writeParserUsage documents parse invocation and supported flags.
 func writeParserUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage:")
-	_, _ = fmt.Fprintln(w, "  pixelsup-go parse <input.sup|input.idx|image_dir> [-o <outdir>] [--limit N] [--max-width N] [--padding N] [--force-white]")
+	_, _ = fmt.Fprintln(w, "  pixelsup-go parse <input.sup|input.idx|image_dir> [-o <outdir>] [--limit N] [--layout digits|no-row-index] [--max-width N] [--padding N] [--force-white]")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Options:")
 	_, _ = fmt.Fprintln(w, "  -o, --output <outdir>  Output directory. Default derived from input path")
 	_, _ = fmt.Fprintln(w, "  --limit <n>             Max cues per sheet. Default: 6")
+	_, _ = fmt.Fprintln(w, "  --layout <mode>         Sheet layout: digits (default) or no-row-index")
 	_, _ = fmt.Fprintln(w, "  --max-width <n>         Max cue width after resize. Default: 1080")
 	_, _ = fmt.Fprintln(w, "  --padding <n>           Extra transparent padding around cue. Default: 10")
 	_, _ = fmt.Fprintln(w, "  --force-white           Force foreground pixels to white")
