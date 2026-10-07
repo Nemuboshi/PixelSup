@@ -1,4 +1,4 @@
-package cli
+package pipeline
 
 import (
 	"errors"
@@ -6,12 +6,13 @@ import (
 	"image"
 	"os"
 	"path/filepath"
-	"pixelsup-go/internal/model"
-	"pixelsup-go/internal/parser/idxsub"
-	"pixelsup-go/internal/parser/sup"
 	"sort"
 	"strconv"
 	"strings"
+
+	"pixelsup-go/internal/model"
+	"pixelsup-go/internal/parser/idxsub"
+	"pixelsup-go/internal/parser/sup"
 )
 
 func loadRenderedCues(input string, info os.FileInfo) ([]model.RenderedCue, string, error) {
@@ -63,11 +64,11 @@ func loadCuesFromImageDir(inputDir string) ([]model.RenderedCue, error) {
 	}
 	numbered := make([]pair, 0)
 	suffix := ""
-	for _, e := range entries {
-		if e.IsDir() {
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(e.Name()))
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
 			continue
 		}
@@ -76,12 +77,12 @@ func loadCuesFromImageDir(inputDir string) ([]model.RenderedCue, error) {
 		} else if suffix != ext {
 			return nil, errors.New("image directory must use a single format only (all .png or all .jpg)")
 		}
-		stem := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		stem := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 		n, err := strconv.Atoi(stem)
 		if err != nil {
-			return nil, fmt.Errorf("image filename must be numeric: %s", e.Name())
+			return nil, fmt.Errorf("image filename must be numeric: %s", entry.Name())
 		}
-		numbered = append(numbered, pair{n: n, p: filepath.Join(inputDir, e.Name())})
+		numbered = append(numbered, pair{n: n, p: filepath.Join(inputDir, entry.Name())})
 	}
 	if len(numbered) == 0 {
 		return nil, errors.New("no .png/.jpg files found in directory")
@@ -102,20 +103,23 @@ func loadCuesFromImageDir(inputDir string) ([]model.RenderedCue, error) {
 
 	cues := make([]model.RenderedCue, 0, len(numbered))
 	for i, item := range numbered {
-		f, err := os.Open(item.p)
+		file, err := os.Open(item.p)
 		if err != nil {
 			return nil, err
 		}
-		img, _, err := image.Decode(f)
-		_ = f.Close()
+		img, _, err := image.Decode(file)
+		_ = file.Close()
 		if err != nil {
 			return nil, fmt.Errorf("decode image %s: %w", item.p, err)
 		}
-		rgba := toRGBA(img)
-		cues = append(cues, model.RenderedCue{Cue: model.SubtitleCue{Index: item.n, StartMS: i * 1000, EndMS: (i + 1) * 1000}, Frame: rgba})
+		cues = append(cues, model.RenderedCue{
+			Cue: model.SubtitleCue{
+				Index:   item.n,
+				StartMS: i * 1000,
+				EndMS:   (i + 1) * 1000,
+			},
+			Frame: toRGBA(img),
+		})
 	}
 	return cues, nil
 }
-
-// parserHelpFlagPresent is checked before parsing so help intent is honored
-// even when required flags are omitted.

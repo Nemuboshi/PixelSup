@@ -1,4 +1,4 @@
-package cli
+package pipeline
 
 import (
 	"fmt"
@@ -7,13 +7,14 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+
 	"pixelsup-go/internal/imageops"
 	"pixelsup-go/internal/model"
 )
 
 func preprocessCues(
 	cues []model.RenderedCue,
-	opts parserOptions,
+	opts ParseOptions,
 	solidBgFallback bool,
 	progress func(done, total int),
 ) ([]model.RenderedCue, error) {
@@ -22,20 +23,19 @@ func preprocessCues(
 	for i, cue := range cues {
 		img := image.Image(cue.Frame)
 		cropped := imageops.AutocropNonTransparent(img, solidBgFallback)
-		padded, err := imageops.AddInnerPadding(cropped, opts.padding)
+		padded, err := imageops.AddInnerPadding(cropped, opts.Padding)
 		if err != nil {
 			return nil, err
 		}
-		resized, err := imageops.ResizeToMaxWidth(padded, opts.maxWidth)
+		resized, err := imageops.ResizeToMaxWidth(padded, opts.MaxWidth)
 		if err != nil {
 			return nil, err
 		}
-		if opts.forceWhite {
+		if opts.ForceWhite {
 			resized = imageops.ForceWhiteForeground(resized)
 		}
 
-		rgba := toRGBA(resized)
-		processed = append(processed, model.RenderedCue{Cue: cue.Cue, Frame: rgba})
+		processed = append(processed, model.RenderedCue{Cue: cue.Cue, Frame: toRGBA(resized)})
 		if progress != nil {
 			progress(i+1, total)
 		}
@@ -44,9 +44,9 @@ func preprocessCues(
 }
 
 func toRGBA(src image.Image) *image.RGBA {
-	b := src.Bounds()
-	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
+	bounds := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.Draw(dst, dst.Bounds(), src, bounds.Min, draw.Src)
 	return dst
 }
 
@@ -54,12 +54,12 @@ func writePNG(path string, img image.Image) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	file, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return png.Encode(f, img)
+	defer file.Close()
+	return png.Encode(file, img)
 }
 
 func prepareOutputDir(outputDir string) error {
@@ -67,8 +67,8 @@ func prepareOutputDir(outputDir string) error {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	matches, _ := filepath.Glob(filepath.Join(outputDir, "sheet_*.png"))
-	for _, m := range matches {
-		_ = os.Remove(m)
+	for _, match := range matches {
+		_ = os.Remove(match)
 	}
 	_ = os.Remove(filepath.Join(outputDir, "timeline.srt"))
 	_ = os.Remove(filepath.Join(outputDir, "mapping.json"))
@@ -76,14 +76,13 @@ func prepareOutputDir(outputDir string) error {
 	return nil
 }
 
-// prepareExportOutputDir clears stale export artifacts while preserving unrelated files.
 func prepareExportOutputDir(outputDir string) error {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
-	cueMatches, _ := filepath.Glob(filepath.Join(outputDir, "cue_*.png"))
-	for _, m := range cueMatches {
-		_ = os.Remove(m)
+	matches, _ := filepath.Glob(filepath.Join(outputDir, "cue_*.png"))
+	for _, match := range matches {
+		_ = os.Remove(match)
 	}
 	_ = os.Remove(filepath.Join(outputDir, "timeline.srt"))
 	_ = os.Remove(filepath.Join(outputDir, "mapping.json"))

@@ -4,11 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"pixelsup-go/internal/model"
-	"pixelsup-go/internal/timeline"
 	"strings"
+
+	"pixelsup-go/internal/pipeline"
 )
 
 type exportOptions struct {
@@ -16,9 +14,7 @@ type exportOptions struct {
 	output string
 }
 
-// that point directly to those cue images instead of composed sheet coordinates.
-//
-// This path intentionally keeps source timings untouched by bypassing composition.
+// runExportCommand parses flags and delegates per-cue export to the pipeline package.
 func runExportCommand(args []string, out io.Writer) error {
 	if exportHelpFlagPresent(args) {
 		writeExportUsage(out)
@@ -30,63 +26,20 @@ func runExportCommand(args []string, out io.Writer) error {
 		return err
 	}
 
-	inputInfo, err := os.Stat(opts.input)
-	if err != nil {
-		return fmt.Errorf("input path not found: %w", err)
-	}
-	if inputInfo.IsDir() {
-		return errors.New("export input must be .sup or .idx")
-	}
-
-	outputDir := opts.output
-	if outputDir == "" {
-		ext := filepath.Ext(opts.input)
-		outputDir = strings.TrimSuffix(opts.input, ext)
-	}
-	if err := prepareExportOutputDir(outputDir); err != nil {
-		return err
-	}
-
-	progressLine(out, "Loading input", 0, 1)
-	rendered, inputKind, err := loadRenderedCues(opts.input, inputInfo)
+	result, err := pipeline.Export(
+		pipeline.ExportOptions{Input: opts.input, Output: opts.output},
+		func(stage string, done, total int) {
+			progressLine(out, stage, done, total)
+			if done == total {
+				progressDone(out)
+			}
+		},
+	)
 	if err != nil {
 		return err
 	}
-	if inputKind != "sup" && inputKind != "idx" {
-		return errors.New("export input must be .sup or .idx")
-	}
-	progressLine(out, "Loading input", 1, 1)
-	progressDone(out)
-	if len(rendered) == 0 {
-		return errors.New("no subtitle cues decoded from input")
-	}
 
-	placements := make(map[int]model.CuePlacement, len(rendered))
-	cues := make([]model.SubtitleCue, 0, len(rendered))
-
-	// Export keeps original decoded frames to preserve cue image fidelity and timing.
-	for i, renderedCue := range rendered {
-		imageName := fmt.Sprintf("cue_%05d.png", renderedCue.Cue.Index)
-		if err := writePNG(filepath.Join(outputDir, imageName), renderedCue.Frame); err != nil {
-			return fmt.Errorf("write %s: %w", imageName, err)
-		}
-		placements[renderedCue.Cue.Index] = model.CuePlacement{
-			SheetName:       imageName,
-			PositionInSheet: 1,
-		}
-		cues = append(cues, renderedCue.Cue)
-		progressLine(out, "Writing cues", i+1, len(rendered))
-	}
-	progressDone(out)
-
-	if err := timeline.WriteSRT(cues, placements, filepath.Join(outputDir, "timeline.srt")); err != nil {
-		return fmt.Errorf("write timeline.srt: %w", err)
-	}
-	if err := timeline.WriteMappingJSON(cues, placements, filepath.Join(outputDir, "mapping.json")); err != nil {
-		return fmt.Errorf("write mapping.json: %w", err)
-	}
-
-	_, _ = fmt.Fprintf(out, "Exported %d cue images in %s\n", len(cues), outputDir)
+	_, _ = fmt.Fprintf(out, "Exported %d cue images in %s\n", result.Count, result.OutputDir)
 	return nil
 }
 

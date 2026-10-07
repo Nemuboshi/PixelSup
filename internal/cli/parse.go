@@ -4,13 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"pixelsup-go/internal/compose"
-	"pixelsup-go/internal/model"
-	"pixelsup-go/internal/timeline"
 	"strconv"
 	"strings"
+
+	"pixelsup-go/internal/compose"
+	"pixelsup-go/internal/pipeline"
 )
 
 type parserOptions struct {
@@ -23,8 +21,7 @@ type parserOptions struct {
 	forceWhite bool
 }
 
-// runParserCommand executes subtitle parsing + image preprocessing + sheet composition.
-// It supports .sup, .idx(+.sub), or directory input with consecutively numbered PNG/JPG files.
+// runParserCommand parses flags and delegates the actual work to the pipeline package.
 func runParserCommand(args []string, out io.Writer) error {
 	if parserHelpFlagPresent(args) {
 		writeParserUsage(out)
@@ -39,87 +36,30 @@ func runParserCommand(args []string, out io.Writer) error {
 		return err
 	}
 
-	inputInfo, err := os.Stat(opts.input)
-	if err != nil {
-		return fmt.Errorf("input path not found: %w", err)
-	}
-
-	outputDir := opts.output
-	if outputDir == "" {
-		if inputInfo.IsDir() {
-			outputDir = filepath.Join(filepath.Dir(opts.input), filepath.Base(opts.input)+"_out")
-		} else {
-			ext := filepath.Ext(opts.input)
-			outputDir = strings.TrimSuffix(opts.input, ext)
-		}
-	}
-
-	progressLine(out, "Loading input", 0, 1)
-	rendered, inputKind, err := loadRenderedCues(opts.input, inputInfo)
-	if err != nil {
-		return err
-	}
-	progressLine(out, "Loading input", 1, 1)
-	progressDone(out)
-	if len(rendered) == 0 {
-		return errors.New("no subtitle cues decoded from input")
-	}
-
-	if err := prepareOutputDir(outputDir); err != nil {
-		return err
-	}
-
-	processed, err := preprocessCues(
-		rendered,
-		opts,
-		inputKind == "image_dir",
-		func(done, total int) { progressLine(out, "Preprocessing", done, total) },
+	result, err := pipeline.Parse(
+		pipeline.ParseOptions{
+			Input:      opts.input,
+			Output:     opts.output,
+			Limit:      opts.limit,
+			MaxWidth:   opts.maxWidth,
+			Padding:    opts.padding,
+			Layout:     opts.layout,
+			ForceWhite: opts.forceWhite,
+		},
+		func(stage string, done, total int) {
+			progressLine(out, stage, done, total)
+			if done == total {
+				progressDone(out)
+			}
+		},
 	)
 	if err != nil {
 		return err
 	}
-	progressDone(out)
 
-	const defaultDigitSeparatorHeight = 12
-	sheets, placements, err := compose.ComposeSheets(
-		processed,
-		opts.limit,
-		defaultDigitSeparatorHeight,
-		opts.layout,
-		func(done, total int) { progressLine(out, "Composing sheets", done, total) },
-	)
-	if err != nil {
-		return fmt.Errorf("compose output: %w", err)
-	}
-	progressDone(out)
-
-	for i, sheet := range sheets {
-		if err := writePNG(filepath.Join(outputDir, sheet.Name), sheet.Image); err != nil {
-			return fmt.Errorf("write %s: %w", sheet.Name, err)
-		}
-		progressLine(out, "Writing sheets", i+1, len(sheets))
-	}
-	if len(sheets) > 0 {
-		progressDone(out)
-	}
-
-	cues := make([]model.SubtitleCue, 0, len(processed))
-	for _, rc := range processed {
-		cues = append(cues, rc.Cue)
-	}
-
-	if err := timeline.WriteSRT(cues, placements, filepath.Join(outputDir, "timeline.srt")); err != nil {
-		return fmt.Errorf("write timeline.srt: %w", err)
-	}
-	if err := timeline.WriteMappingJSON(cues, placements, filepath.Join(outputDir, "mapping.json")); err != nil {
-		return fmt.Errorf("write mapping.json: %w", err)
-	}
-
-	_, _ = fmt.Fprintf(out, "Generated %d sheets in %s\n", len(sheets), outputDir)
+	_, _ = fmt.Fprintf(out, "Generated %d sheets in %s\n", result.Count, result.OutputDir)
 	return nil
 }
-
-// runExportCommand writes one cue image per subtitle event and emits timeline files
 
 func parserHelpFlagPresent(args []string) bool {
 	for _, arg := range args {
@@ -130,7 +70,6 @@ func parserHelpFlagPresent(args []string) bool {
 	return false
 }
 
-// parseParserArgs validates parse flags and returns parsed options.
 func parseParserArgs(args []string) (parserOptions, error) {
 	opts := parserOptions{limit: 6, maxWidth: 1080, padding: 10, layout: compose.LayoutDigits}
 	inputs := make([]string, 0, 1)
@@ -148,11 +87,11 @@ func parseParserArgs(args []string) (parserOptions, error) {
 			if i+1 >= len(args) {
 				return opts, errors.New("failed to parse parse flags: flag needs an argument: --limit")
 			}
-			v, err := strconv.Atoi(args[i+1])
+			value, err := strconv.Atoi(args[i+1])
 			if err != nil {
 				return opts, errors.New("--limit must be an integer")
 			}
-			opts.limit = v
+			opts.limit = value
 			i++
 		case "--layout":
 			if i+1 >= len(args) {
@@ -164,21 +103,21 @@ func parseParserArgs(args []string) (parserOptions, error) {
 			if i+1 >= len(args) {
 				return opts, errors.New("failed to parse parse flags: flag needs an argument: --max-width")
 			}
-			v, err := strconv.Atoi(args[i+1])
+			value, err := strconv.Atoi(args[i+1])
 			if err != nil {
 				return opts, errors.New("--max-width must be an integer")
 			}
-			opts.maxWidth = v
+			opts.maxWidth = value
 			i++
 		case "--padding":
 			if i+1 >= len(args) {
 				return opts, errors.New("failed to parse parse flags: flag needs an argument: --padding")
 			}
-			v, err := strconv.Atoi(args[i+1])
+			value, err := strconv.Atoi(args[i+1])
 			if err != nil {
 				return opts, errors.New("--padding must be an integer")
 			}
-			opts.padding = v
+			opts.padding = value
 			i++
 		case "--force-white":
 			opts.forceWhite = true
@@ -197,8 +136,6 @@ func parseParserArgs(args []string) (parserOptions, error) {
 	return opts, nil
 }
 
-// parseExportArgs validates export flags for a single binary subtitle input file.
-
 func validateParserOptions(opts parserOptions) error {
 	if opts.limit <= 0 {
 		return errors.New("--limit must be > 0")
@@ -215,7 +152,6 @@ func validateParserOptions(opts parserOptions) error {
 	return nil
 }
 
-// writeParserUsage documents parse invocation and supported flags.
 func writeParserUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage:")
 	_, _ = fmt.Fprintln(w, "  pixelsup-go parse <input.sup|input.idx|image_dir> [-o <outdir>] [--limit N] [--layout digits|no-row-index] [--max-width N] [--padding N] [--force-white]")
