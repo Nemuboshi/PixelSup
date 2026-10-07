@@ -1,0 +1,5 @@
+ocr_config.yaml
+dist/*
+.pi/
+coverage
+*.coverprofile
