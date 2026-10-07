@@ -24,7 +24,7 @@ Examples:
 <binary> parse input.idx -o out_no_index --layout no-row-index
 <binary> export input.idx -o out_export
 <binary> ocr out --config ./ocr_config.yaml --strict
-<binary> ocr out --config ./dist/ocr_config.yaml --dump-paddle-responses ./ocr-responses
+<binary> ocr out --config ./ocr_config.yaml --dump-paddle-responses ./ocr-responses
 ```
 
 ## Commands

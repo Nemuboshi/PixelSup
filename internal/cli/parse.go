@@ -154,7 +154,7 @@ func validateParserOptions(opts parserOptions) error {
 
 func writeParserUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage:")
-	_, _ = fmt.Fprintln(w, "  pixelsup-go parse <input.sup|input.idx|image_dir> [-o <outdir>] [--limit N] [--layout digits|no-row-index] [--max-width N] [--padding N] [--force-white]")
+	_, _ = fmt.Fprintln(w, "  pixelsup parse <input.sup|input.idx|image_dir> [-o <outdir>] [--limit N] [--layout digits|no-row-index] [--max-width N] [--padding N] [--force-white]")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Options:")
 	_, _ = fmt.Fprintln(w, "  -o, --output <outdir>  Output directory. Default derived from input path")

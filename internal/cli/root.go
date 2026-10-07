@@ -5,8 +5,7 @@ import (
 	"io"
 )
 
-// Command is a lightweight command descriptor used in the initial migration phase.
-// It keeps subcommand definitions explicit without introducing external dependencies.
+// Command describes one CLI subcommand without an external command framework.
 type Command struct {
 	name        string
 	description string
@@ -19,7 +18,6 @@ func (c *Command) Name() string {
 }
 
 // RootCommand manages top-level dispatch for parse/export/ocr subcommands.
-// This structure mirrors the future command tree and can be replaced by Cobra later if desired.
 type RootCommand struct {
 	commands map[string]*Command
 }
@@ -97,10 +95,10 @@ func (r *RootCommand) Execute(args []string, stdout, stderr io.Writer) int {
 }
 
 func writeUsage(w io.Writer, r *RootCommand) {
-	_, _ = fmt.Fprintln(w, "pixelsup-go: subtitle tooling")
+	_, _ = fmt.Fprintln(w, "pixelsup: subtitle tooling")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Usage:")
-	_, _ = fmt.Fprintln(w, "  pixelsup-go <command> [args]")
+	_, _ = fmt.Fprintln(w, "  pixelsup <command> [args]")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Commands:")
 	for _, cmd := range r.Commands() {

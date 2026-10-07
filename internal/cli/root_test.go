@@ -133,7 +133,7 @@ func TestExecute_Export_Help(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0 for export help, got %d", code)
 	}
-	if !strings.Contains(out.String(), "pixelsup-go export") {
+	if !strings.Contains(out.String(), "pixelsup export") {
 		t.Fatalf("expected export help output, got: %q", out.String())
 	}
 	if err.Len() != 0 {

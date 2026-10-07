@@ -2,8 +2,7 @@ package model
 
 import "image"
 
-// SubtitleCue stores logical subtitle timing information.
-// The image payload is intentionally omitted in the early Go migration phase.
+// SubtitleCue stores logical subtitle timing information independently of rendered image data.
 type SubtitleCue struct {
 	Index   int
 	StartMS int

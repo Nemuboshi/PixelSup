@@ -86,7 +86,7 @@ func ocrHelpFlagPresent(args []string) bool {
 
 func writeOCRUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage:")
-	_, _ = fmt.Fprintln(w, "  pixelsup-go ocr <output_dir> [--config <yaml>] [--strict] [--dump-paddle-responses <dir>]")
+	_, _ = fmt.Fprintln(w, "  pixelsup ocr <output_dir> [--config <yaml>] [--strict] [--dump-paddle-responses <dir>]")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Options:")
 	_, _ = fmt.Fprintln(w, "  --config <yaml>  OCR config file path. Default: ./ocr_config.yaml")

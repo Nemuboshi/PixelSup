@@ -54,7 +54,7 @@ func exportHelpFlagPresent(args []string) bool {
 
 func writeExportUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage:")
-	_, _ = fmt.Fprintln(w, "  pixelsup-go export <input.sup|input.idx> [-o <outdir>]")
+	_, _ = fmt.Fprintln(w, "  pixelsup export <input.sup|input.idx> [-o <outdir>]")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Options:")
 	_, _ = fmt.Fprintln(w, "  -o, --output <outdir>  Output directory. Default derived from input path")

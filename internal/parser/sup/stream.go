@@ -5,9 +5,8 @@ import "fmt"
 var pgHeader = []byte{'P', 'G'}
 
 // Segment represents one raw SUP segment packet.
-// Parsing here is intentionally low-level: it only splits stream packets and
-// exposes raw segment bodies. Higher-level PCS/PDS/ODS interpretation is done
-// in later migration steps.
+// Parsing here stays low-level: it only splits stream packets and exposes raw
+// segment bodies. Higher-level PCS/PDS/ODS interpretation lives in parser.go.
 type Segment struct {
 	PTS90K int
 	Type   byte

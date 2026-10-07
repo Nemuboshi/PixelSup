@@ -14,7 +14,7 @@ func u24(data []byte, off int) int {
 
 // ycbcrToRGBA converts PGS palette YCbCr+Alpha into clamped RGBA.
 // The conversion formula matches the Python reference implementation to keep
-// output parity stable during migration.
+// output parity stable across implementations.
 func ycbcrToRGBA(y, cb, cr, alpha int) (int, int, int, int) {
 	c := y - 16
 	d := cb - 128

@@ -67,7 +67,7 @@ func ParseTimestamp(raw string) (int, error) {
 
 // ParseTimestampLine extracts an IDX entry from a single text line.
 //
-// Behavior is intentionally aligned with the Python parser used during migration:
+// Behavior is intentionally aligned with the established IDX parser semantics:
 // - only lines that start with "timestamp:" (case-insensitive) are considered
 // - timestamp and filepos are searched within that line
 // - malformed timestamp lines are skipped without returning an error
@@ -101,7 +101,7 @@ func ParseTimestampLine(rawLine string) (Entry, bool) {
 // - sorted timestamp/filepos entries
 //
 // Palette parsing intentionally tolerates malformed tokens by ignoring them.
-// This keeps the migration parser robust on mixed-quality IDX files while still
+// This keeps the parser robust on mixed-quality IDX files while still
 // producing deterministic defaults for missing colors.
 func ParseIDX(text string) ([]uint32, []Entry) {
 	palette, entries, _ := parseIDXCore(text)
